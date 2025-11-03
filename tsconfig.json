@@ -1,0 +1,46 @@
+{
+  // Visit https://aka.ms/tsconfig to read more about this file
+  "compilerOptions": {
+    // File Layout
+    "rootDir": "./src",        // ✅ DESCOMENTADO
+    "outDir": "./dist",        // ✅ DESCOMENTADO
+
+    // Environment Settings
+    // See also https://aka.ms/tsconfig/module
+    "module": "nodenext",
+    "target": "esnext",
+    "lib": ["esnext"],         // ✅ ADICIONADO
+    "types": ["node"],         // ✅ CORRIGIDO
+
+    // Other Outputs
+    "sourceMap": true,
+    "declaration": true,
+    "declarationMap": true,
+
+    // Stricter Typechecking Options
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+
+    // Style Options
+    "noImplicitReturns": true,           // ✅ DESCOMENTADO
+    "noImplicitOverride": true,          // ✅ DESCOMENTADO
+    "noUnusedLocals": true,              // ✅ DESCOMENTADO
+    "noUnusedParameters": true,          // ✅ DESCOMENTADO
+    "noFallthroughCasesInSwitch": true,  // ✅ DESCOMENTADO
+    // "noPropertyAccessFromIndexSignature": true,
+
+    // Recommended Options
+    "strict": true,
+    // "jsx": "react-jsx",              // ❌ REMOVIDO (não precisa para Node.js)
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noUncheckedSideEffectImports": true,
+    "moduleDetection": "force",
+    "skipLibCheck": true,
+    "esModuleInterop": true,             // ✅ ADICIONADO (ajuda com imports)
+    "resolveJsonModule": true,           // ✅ ADICIONADO (para importar JSON)
+    "forceConsistentCasingInFileNames": true  // ✅ ADICIONADO (evita erros de maiúsculas)
+  },
+  "include": ["src/**/*"],               // ✅ ADICIONADO
+  "exclude": ["node_modules", "dist"]    // ✅ ADICIONADO
+}
