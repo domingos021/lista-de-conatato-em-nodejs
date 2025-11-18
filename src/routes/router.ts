@@ -1,22 +1,27 @@
 // ===============================================
-// 📘 CRUD DE CONTATOS COM EXPRESS E NODE.JS
+// 📘 ROTAS DE CONTATOS - CAMADA DE CONTROLE
 // ===============================================
-// Este módulo define rotas para criar, listar, atualizar, deletar
-// e limpar contatos, utilizando funções auxiliares importadas
-// de utils/fileHelpers e validações de validations/contactValidations.
+// Este arquivo define apenas as rotas HTTP e delega toda a lógica
+// de negócio para o Service Layer (contactService.ts).
+// Responsabilidades: receber requisições, validar entrada, chamar services e retornar respostas.
 
 import express from "express";
 import type { Request, Response } from "express";
-import {
-  readContactList,
-  saveContactList,
-  clearContactList,
-} from "../utils/fileHelpers.js";
 import { randomUUID } from "crypto";
 import {
-  findContactIndex, // Localiza o índice de um contato na lista pelo ID
-  validateContactCreation, // Valida todos os campos necessários para criar um novo contato
+  findContactIndex,
+  validateContactCreation,
 } from "../validations/contactValidations.js";
+import {
+  getContacts,
+  searchContacts,
+  getContactById,
+  addContact,
+  updateContactInList,
+  deleteContactById,
+  removeDuplicateContacts,
+  clearAllContacts,
+} from "../services/contactService.js";
 import type {
   Contact,
   CreateContactBody,
@@ -24,49 +29,64 @@ import type {
   DeleteContactBody,
 } from "../types/index.js";
 
-const router = express.Router(); // ✅ Instância do roteador Express
+const router = express.Router();
 
 // ===============================================
-// 🌐 ROTAS PRINCIPAIS
+// 🌐 ROTA RAIZ - DOCUMENTAÇÃO DA API
 // ===============================================
-
-// GET / → Confirma que a API está ativa e funcionando
-router.get("/", (req, res) => {
+// GET / → Confirma que a API está ativa e lista todas as rotas disponíveis
+router.get("/", (_req, res) => {
   res.json({
     message: "API de Contatos funcionando!",
     routes: [
-      "POST   /api/contatos/contato", // Criar novo contato
-      "GET    /api/contatos/contatos", // Listar todos os contatos (aceita ?nome= e ?id=)
-      "GET    /api/contatos/contato/:id", // Buscar apenas um contato pelo ID
-      "PUT    /api/contatos/contato", // Atualizar contato existente
-      "DELETE /api/contatos/contato", // Deletar contato
-      "DELETE /api/contatos/remove-duplicates", // Remover contatos duplicados
-      "POST   /api/contatos/clear", // Limpar toda a lista de contatos
+      "POST   /api/contatos/contato",          // Criar novo contato
+      "GET    /api/contatos/contatos",         // Listar todos (aceita ?nome= e ?id=)
+      "GET    /api/contatos/contato/:id",      // Buscar um contato específico
+      "PUT    /api/contatos/contato",          // Atualizar contato existente
+      "DELETE /api/contatos/contato",          // Deletar contato
+      "DELETE /api/contatos/remove-duplicates",// Remover duplicados
+      "POST   /api/contatos/clear",            // Limpar toda a lista
     ],
   });
 });
 
 // ===============================================
-// POST /contato → Criar um novo contato
+// ➕ POST /contato → CRIAR NOVO CONTATO
 // ===============================================
 router.post(
   "/contato",
   async (req: Request<{}, {}, CreateContactBody>, res: Response) => {
-    const { id, fullName, surname, email, phone } = req.body; // Recebe dados do corpo da requisição
+    const { id, fullName, surname, email, phone } = req.body;
+
+    // ✅ Validação prévia: campos obrigatórios devem existir
+    if (!fullName || !surname) {
+      return res.status(400).json({ 
+        error: "Nome e sobrenome são obrigatórios." 
+      });
+    }
 
     try {
-      const list = await readContactList(); // 📂 Lê a lista do arquivo/ cria um (list) que armazena a lista de contato
+      // 📂 Busca a lista atual de contatos
+      const list = await getContacts();
 
+      // ✅ Valida os dados do novo contato
+      // Usa spread condicional para passar apenas propriedades definidas (compatível com exactOptionalPropertyTypes)
       const validationError = validateContactCreation(
-        { id, fullName, surname, email, phone }, // dados do contato
-        list // lista de contatos existentes
+        {
+          ...(id !== undefined && { id }),              // Só adiciona 'id' se não for undefined
+          fullName,                                      // Campo obrigatório
+          surname,                                       // Campo obrigatório
+          ...(email !== undefined && { email }),        // Só adiciona 'email' se não for undefined
+          ...(phone !== undefined && { phone }),        // Só adiciona 'phone' se não for undefined
+        },
+        list
       );
 
       if (validationError) {
         return res.status(400).json({ error: validationError });
       }
 
-      // 🆕 Cria o novo contato (usa o ID enviado ou gera UUID)
+      // 🆕 Cria o objeto do novo contato (gera UUID se não houver ID)
       const newContact: Contact = {
         id: id ?? randomUUID(),
         fullName,
@@ -75,8 +95,8 @@ router.post(
         phone,
       };
 
-      list.push(newContact);
-      await saveContactList(list);
+      // 💾 Adiciona o contato na lista através do service
+      await addContact(newContact);
 
       return res.status(201).json({
         success: true,
@@ -90,7 +110,7 @@ router.post(
 );
 
 // ===============================================
-// GET /contatos → Listar todos os contatos (com filtros opcionais)
+// 📋 GET /contatos → LISTAR CONTATOS (COM FILTROS OPCIONAIS)
 // ===============================================
 router.get(
   "/contatos",
@@ -99,22 +119,11 @@ router.get(
     res: Response
   ) => {
     try {
-      let list = await readContactList();
-
-      // 🔍 Filtro por nome (busca em fullName e surname, case-insensitive)
-      if (req.query.nome) {
-        const searchName = req.query.nome.toLowerCase();
-        list = list.filter(
-          (c) =>
-            c.fullName.toLowerCase().includes(searchName) ||
-            c.surname.toLowerCase().includes(searchName)
-        );
-      }
-
-      // 🔍 Filtro por ID (busca exata)
-      if (req.query.id) {
-        list = list.filter((c) => String(c.id) === String(req.query.id));
-      }
+      // 🔍 Busca contatos aplicando filtros opcionais (nome e/ou id)
+      const list = await searchContacts({
+        ...(req.query.nome && { nome: req.query.nome }),
+        ...(req.query.id && { id: req.query.id }),
+      });
 
       return res.json({
         success: true,
@@ -128,14 +137,19 @@ router.get(
 );
 
 // ===============================================
-// GET /contato/:id → Buscar um único contato pelo ID
+// 🔍 GET /contato/:id → BUSCAR UM ÚNICO CONTATO
 // ===============================================
 router.get("/contato/:id", async (req: Request, res: Response) => {
   const { id } = req.params;
 
+  // ✅ Validação: ID é obrigatório
+  if (!id) {
+    return res.status(400).json({ error: "ID é obrigatório." });
+  }
+
   try {
-    const list = await readContactList();
-    const contact = list.find((c) => String(c.id) === String(id));
+    // 🔍 Busca o contato pelo ID através do service
+    const contact = await getContactById(id);
 
     if (!contact) {
       return res.status(404).json({ error: "Contato não encontrado." });
@@ -148,32 +162,40 @@ router.get("/contato/:id", async (req: Request, res: Response) => {
 });
 
 // ===============================================
-// PUT /contato → Atualizar contato pelo ID
+// ✏️ PUT /contato → ATUALIZAR CONTATO EXISTENTE
 // ===============================================
 router.put(
   "/contato",
   async (req: Request<{}, {}, UpdateContactBody>, res: Response) => {
     const { id, fullName, surname, email, phone } = req.body;
 
-    if (!id)
+    // ✅ Validação: ID é obrigatório para atualização
+    if (!id) {
       return res
         .status(400)
         .json({ error: "ID do contato é obrigatório para atualizar." });
+    }
 
     try {
-      const list = await readContactList();
+      // 📂 Busca a lista de contatos
+      const list = await getContacts();
+
+      // 🔍 Localiza o índice do contato na lista
       const index = findContactIndex(id, list);
 
-      if (index === -1)
+      if (index === -1) {
         return res.status(404).json({ error: "Contato não encontrado." });
+      }
 
       const contactToUpdate = list[index];
-      if (!contactToUpdate)
+      if (!contactToUpdate) {
         return res
           .status(500)
           .json({ error: "Erro interno ao localizar contato." });
+      }
 
-      list[index] = {
+      // 🔄 Cria o objeto atualizado mantendo valores anteriores se não fornecidos
+      const updatedContact: Contact = {
         ...contactToUpdate,
         fullName: fullName ?? contactToUpdate.fullName,
         surname: surname ?? contactToUpdate.surname,
@@ -181,12 +203,13 @@ router.put(
         phone: phone ?? contactToUpdate.phone,
       };
 
-      await saveContactList(list);
+      // 💾 Salva a atualização através do service
+      await updateContactInList(index, updatedContact);
 
       return res.json({
         success: true,
         message: "Contato atualizado com sucesso",
-        contato: list[index],
+        contato: updatedContact,
       });
     } catch (err) {
       return res.status(500).json({ error: "Erro ao atualizar contato." });
@@ -195,26 +218,27 @@ router.put(
 );
 
 // ===============================================
-// DELETE /contato → Remover contato pelo ID
+// 🗑️ DELETE /contato → REMOVER CONTATO POR ID
 // ===============================================
 router.delete(
   "/contato",
   async (req: Request<{}, {}, DeleteContactBody>, res: Response) => {
     const { id } = req.body;
 
-    if (!id)
+    // ✅ Validação: ID é obrigatório para deletar
+    if (!id) {
       return res
         .status(400)
         .json({ error: "É necessário informar o ID para deletar o contato." });
+    }
 
     try {
-      const list = await readContactList();
-      const filteredList = list.filter((c) => c.id !== id);
+      // 🗑️ Tenta deletar o contato através do service
+      const wasDeleted = await deleteContactById(id);
 
-      if (filteredList.length === list.length)
+      if (!wasDeleted) {
         return res.status(404).json({ error: "Contato não encontrado." });
-
-      await saveContactList(filteredList);
+      }
 
       return res.json({
         success: true,
@@ -229,69 +253,24 @@ router.delete(
 );
 
 // ===============================================
-// 🗑️ DELETE /remove-duplicates → Remover contatos duplicados
+// 🧹 DELETE /remove-duplicates → REMOVER DUPLICADOS
 // ===============================================
-// Esta rota percorre toda a lista de contatos e remove duplicações
-// com base em:
-//  • email (case-insensitive)
-//  • phone (apenas números)
-//  • combinação fullName + surname (case-insensitive)
-//
-// Mantém sempre a primeira ocorrência e remove as demais.
-// Útil para limpar dados antigos inseridos antes das validações.
-// ===============================================
+// Remove contatos duplicados baseado em:
+// • Email (case-insensitive)
+// • Telefone (apenas números)
+// • Nome completo (fullName + surname, case-insensitive)
+// Mantém sempre a primeira ocorrência encontrada.
 router.delete("/remove-duplicates", async (_req: Request, res: Response) => {
   try {
-    const list = await readContactList(); // 📂 Lê a lista atual
-
-    const seenEmails = new Set<string>(); // 🔹 Armazena emails já vistos para identificar duplicatas (case-insensitive)
-    const seenPhones = new Set<string>(); // 🔹 Armazena números de telefone já vistos para identificar duplicatas (somente números)
-    const seenNames = new Set<string>(); // 🔹 Armazena combinações fullName + surname já vistas para identificar duplicatas (case-insensitive)
-
-    const cleanedList: Contact[] = [];
-    let removedCount = 0;
-
-    for (const c of list) {
-      // 🔹 Cria uma chave de email (minúscula e sem espaços extras) para checar duplicatas
-      const emailKey = c.email?.toLowerCase().trim();
-
-      // 🔹 Cria uma chave de telefone removendo todos os caracteres não numéricos
-      const phoneKey = c.phone?.replace(/\D/g, "");
-
-      // 🔹 Cria uma chave combinando fullName + surname (minúscula e sem espaços extras)
-      const nameKey = `${c.fullName.toLowerCase().trim()}-${c.surname
-        .toLowerCase()
-        .trim()}`;
-
-      // 🔹 Verifica se já vimos esse email, telefone ou combinação de nome
-      const isDuplicate =
-        (emailKey && seenEmails.has(emailKey)) ||
-        (phoneKey && seenPhones.has(phoneKey)) ||
-        seenNames.has(nameKey);
-
-      // 🔹 Se for duplicado, incrementa contador e pula para o próximo contato
-      if (isDuplicate) {
-        removedCount++;
-        continue; // ❌ ignora contatos duplicados
-      }
-
-      // Marca como visto ✔
-      if (emailKey) seenEmails.add(emailKey);
-      if (phoneKey) seenPhones.add(phoneKey);
-      seenNames.add(nameKey);
-
-      cleanedList.push(c);
-    }
-
-    // ✍️ Salva somente os contatos únicos
-    await saveContactList(cleanedList);
+    // 🧹 Remove duplicados através do service
+    const result = await removeDuplicateContacts();
 
     return res.json({
       success: true,
       message: "Contatos duplicados removidos com sucesso!",
-      removidos: removedCount,
-      totalAntes: list.length,
-      totalDepois: cleanedList.length,
+      removidos: result.removidos,
+      totalAntes: result.totalAntes,
+      totalDepois: result.totalDepois,
     });
   } catch (err) {
     return res.status(500).json({
@@ -301,11 +280,13 @@ router.delete("/remove-duplicates", async (_req: Request, res: Response) => {
 });
 
 // ===============================================
-// POST /clear → Limpar toda a lista de contatos
+// 🗑️ POST /clear → LIMPAR TODA A LISTA
 // ===============================================
 router.post("/clear", async (_req: Request, res: Response) => {
   try {
-    await clearContactList();
+    // 🗑️ Limpa todos os contatos através do service
+    await clearAllContacts();
+
     return res.json({
       success: true,
       message: "Lista de contatos limpa com sucesso.",
